@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>드론 비행금지구역 지도</title>
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<meta name="theme-color" content="#141a17">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<style>
+  :root{--bg:#f3f5f2;--panel:#fff;--ink:#17211c;--sub:#5d6b63;--line:#d5dcd6;
+        --p:#d62f2f;--r:#e8890c;--c:#2a6fdb;--n:#7a3fb5;--ok:#1f8a4c}
+  @media (prefers-color-scheme:dark){:root{--bg:#141a17;--panel:#1d2521;--ink:#e8efe9;--sub:#9fb0a5;--line:#34423a}}
+  *{box-sizing:border-box}
+  html,body{height:100%;margin:0;font-family:"Pretendard","Noto Sans KR",system-ui,sans-serif;background:var(--bg);color:var(--ink)}
+  #app{display:grid;grid-template-columns:320px 1fr;height:100%}
+  aside{background:var(--panel);border-right:1px solid var(--line);padding:18px;overflow:auto}
+  h1{font-size:19px;margin:0 0 4px}
+  .sub{color:var(--sub);font-size:13px;line-height:1.5;margin:0 0 16px}
+  .legend label{display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--line);font-size:14px;cursor:pointer}
+  .dot{width:14px;height:14px;border-radius:50%;flex:none;border:2px solid}
+  .legend small{display:block;color:var(--sub);font-size:12px}
+  button{font:inherit;width:100%;padding:11px;border-radius:8px;border:1px solid var(--ink);background:var(--ink);color:var(--panel);cursor:pointer;margin-top:14px}
+  button:focus-visible,input:focus-visible{outline:3px solid var(--c);outline-offset:2px}
+  #status{margin-top:12px;padding:12px;border-radius:8px;border:1px solid var(--line);font-size:14px;line-height:1.5;display:none}
+  #status.ok{border-color:var(--ok)} #status.bad{border-color:var(--p)}
+  .warn{margin-top:16px;font-size:12px;color:var(--sub);line-height:1.5}
+  #map{height:100%;min-height:300px}
+  .me{width:18px;height:18px;border-radius:50%;background:#2a6fdb;border:3px solid #fff;box-shadow:0 0 0 0 rgba(42,111,219,.6);animation:pulse 2s infinite}
+  @keyframes pulse{70%{box-shadow:0 0 0 14px rgba(42,111,219,0)}100%{box-shadow:0 0 0 0 rgba(42,111,219,0)}}
+  @media (prefers-reduced-motion:reduce){.me{animation:none}}
+  .locate-ctl{width:34px;height:34px;line-height:34px;text-align:center;font-size:18px;text-decoration:none;background:#fff}
+  @media (max-width:760px){#app{grid-template-columns:1fr;grid-template-rows:auto 1fr}aside{border-right:0;border-bottom:1px solid var(--line);max-height:45vh}#map{min-height:55vh}}
+</style>
+</head>
+<body>
+<div id="app">
+  <aside>
+    <h1>드론 비행금지구역 지도</h1>
+    <p class="sub">공항·원전·비행금지구역을 지도에 표시하고, 내 위치가 제한구역 안인지 확인합니다.</p>
+    <div class="legend" id="legend"></div>
+    <button id="locate">내 위치로 이동</button>
+    <div id="status" role="status"></div>
+    <p class="warn">⚠ 이 지도의 구역은 <b>대략적인 예시 데이터</b>입니다. 실제 비행 전에는 반드시 국토교통부 <a href="https://www.droneonestop.kr" target="_blank" rel="noopener">드론원스톱</a> 또는 UAS Map 앱에서 공식 정보와 비행승인 여부를 확인하세요.</p>
+  </aside>
+  <div id="map"></div>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+/* ===== 구역 데이터 (data 배열만 수정/추가하면 됩니다) =====
+   type: P=비행금지, C=관제권, N=원전 보호구역
+   radius: 미터 단위. 좌표는 대략값이므로 공식 자료(V-World, 공공데이터포털)로 교체하세요. */
+const TYPES = {
+  P:{name:'비행금지구역 (P)',desc:'원칙적으로 비행 불가',color:'#d62f2f'},
+  C:{name:'공항 관제권',desc:'반경 약 9.3km, 승인 필요',color:'#e8890c'},
+  N:{name:'원전 주변',desc:'반경 약 18.6km, 승인 필요',color:'#7a3fb5'}
+};
+const data = [
+  {type:'P',name:'서울 P-73 (용산 일대, 대략)',lat:37.5340,lng:126.9774,radius:3700},
+  {type:'C',name:'김포국제공항',lat:37.5586,lng:126.7906,radius:9300},
+  {type:'C',name:'인천국제공항',lat:37.4602,lng:126.4407,radius:9300},
+  {type:'C',name:'서울공항(성남)',lat:37.4449,lng:127.1139,radius:9300},
+  {type:'C',name:'수원비행장',lat:37.2394,lng:127.0072,radius:9300},
+  {type:'C',name:'김해국제공항',lat:35.1795,lng:128.9382,radius:9300},
+  {type:'C',name:'제주국제공항',lat:33.5104,lng:126.4929,radius:9300},
+  {type:'C',name:'대구국제공항',lat:35.8941,lng:128.6586,radius:9300},
+  {type:'C',name:'청주국제공항',lat:36.7166,lng:127.4991,radius:9300},
+  {type:'N',name:'고리원자력발전소',lat:35.3199,lng:129.2906,radius:18600},
+  {type:'N',name:'월성원자력발전소',lat:35.7133,lng:129.4753,radius:18600},
+  {type:'N',name:'한울원자력발전소',lat:37.0925,lng:129.3836,radius:18600},
+  {type:'N',name:'한빛원자력발전소',lat:35.4147,lng:126.4229,radius:18600}
+];
+
+const map = L.map('map').setView([37.5326,126.9900],10);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{
+  maxZoom:18, attribution:'© OpenStreetMap contributors'}).addTo(map);
+
+const groups = {};
+Object.keys(TYPES).forEach(k=>groups[k]=L.layerGroup().addTo(map));
+data.forEach(z=>{
+  const t=TYPES[z.type];
+  L.circle([z.lat,z.lng],{radius:z.radius,color:t.color,weight:2,fillColor:t.color,fillOpacity:.18})
+   .bindPopup(`<b>${z.name}</b><br>${t.name}<br>반경 ${(z.radius/1000).toFixed(1)}km`)
+   .addTo(groups[z.type]);
+  L.circleMarker([z.lat,z.lng],{radius:4,color:t.color,fillOpacity:1}).addTo(groups[z.type]);
+});
+
+// 범례 + 레이어 토글
+const legend=document.getElementById('legend');
+Object.entries(TYPES).forEach(([k,t])=>{
+  const l=document.createElement('label');
+  l.innerHTML=`<input type="checkbox" checked><span class="dot" style="border-color:${t.color};background:${t.color}33"></span><span>${t.name}<small>${t.desc}</small></span>`;
+  l.querySelector('input').addEventListener('change',e=>{
+    e.target.checked?groups[k].addTo(map):map.removeLayer(groups[k]);
+  });
+  legend.appendChild(l);
+});
+
+// ===== 실시간 GPS 추적 + 구역 판정 =====
+const box=document.getElementById('status');
+let me,acc,watchId=null,last=null,firstFix=true;
+const meIcon=L.divIcon({className:'',html:'<div class="me"></div>',iconSize:[18,18],iconAnchor:[9,9]});
+
+function show(cls,html){box.style.display='block';box.className=cls;box.innerHTML=html;}
+
+function onPos(pos){
+  const p=L.latLng(pos.coords.latitude,pos.coords.longitude);
+  last=p;
+  if(!me){me=L.marker(p,{icon:meIcon,zIndexOffset:1000}).addTo(map).bindPopup('내 위치');
+          acc=L.circle(p,{radius:pos.coords.accuracy,color:'#2a6fdb',weight:1,fillOpacity:.1}).addTo(map);}
+  else{me.setLatLng(p);acc.setLatLng(p).setRadius(pos.coords.accuracy);}
+  if(firstFix){map.setView(p,12);firstFix=false;}
+  const hits=data.filter(z=>p.distanceTo([z.lat,z.lng])<=z.radius);
+  const accTxt=`<br><small>GPS 정확도 약 ${Math.round(pos.coords.accuracy)}m</small>`;
+  if(hits.length){
+    show('bad','<b>제한구역 안에 있습니다.</b><br>'+hits.map(z=>`${z.name} (${TYPES[z.type].name})`).join('<br>')+'<br>비행 전 승인 여부를 확인하세요.'+accTxt);
+  }else{
+    show('ok','<b>표시된 구역 밖입니다.</b><br>이 지도에 없는 구역이 있을 수 있어요. 공식 앱으로 한 번 더 확인하세요.'+accTxt);
+  }
+}
+function onErr(err){
+  const msg=err.code===1?'위치 권한이 꺼져 있습니다. 브라우저·휴대폰 설정에서 이 사이트의 위치 권한을 허용해 주세요.'
+           :err.code===3?'위치 확인 시간이 초과되었습니다. 실외나 GPS가 잘 잡히는 곳에서 다시 시도해 주세요.'
+           :'위치를 가져오지 못했습니다.';
+  show('bad',msg);
+  watchId=null;
+}
+function startTracking(){
+  if(!navigator.geolocation){show('bad','이 브라우저는 위치 기능을 지원하지 않습니다.');return;}
+  if(watchId===null){
+    show('','위치를 확인하는 중입니다…');
+    watchId=navigator.geolocation.watchPosition(onPos,onErr,{enableHighAccuracy:true,maximumAge:3000,timeout:15000});
+  }
+}
+function goToMe(){
+  if(last){map.setView(last,Math.max(map.getZoom(),14));}
+  else{firstFix=true;}
+  startTracking();
+}
+document.getElementById('locate').addEventListener('click',goToMe);
+
+// 지도 위 📍 버튼
+const LocateCtl=L.Control.extend({options:{position:'topleft'},onAdd(){
+  const a=L.DomUtil.create('a','leaflet-bar locate-ctl');
+  a.href='#';a.title='내 위치로 이동';a.setAttribute('role','button');a.textContent='📍';
+  L.DomEvent.on(a,'click',e=>{L.DomEvent.preventDefault(e);goToMe();});
+  return a;}});
+map.addControl(new LocateCtl());
+
+startTracking(); // 페이지를 열면 자동으로 내 위치로 이동
+
+// 홈 화면에 앱처럼 설치할 수 있도록 서비스 워커 등록
+if('serviceWorker' in navigator && location.protocol.startsWith('http')){
+  navigator.serviceWorker.register('sw.js').catch(()=>{});
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,12 @@
+{
+  "name": "드론 비행금지구역 지도",
+  "short_name": "드론지도",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#141a17",
+  "theme_color": "#141a17",
+  "icons": [
+    {"src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable"}
+  ]
+}
